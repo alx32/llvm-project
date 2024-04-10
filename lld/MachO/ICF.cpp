@@ -133,13 +133,13 @@ bool ICF::equalsConstant(const ConcatInputSection *ia,
       assert(isa<Defined>(sa));
       const auto *da = cast<Defined>(sa);
       const auto *db = cast<Defined>(sb);
-      if (!da->isec || !db->isec) {
+      if (!da->theCanonicalIsec() || !db->theCanonicalIsec()) {
         assert(da->isAbsolute() && db->isAbsolute());
         return da->value + ra.addend == db->value + rb.addend;
       }
-      isecA = da->isec;
+      isecA = da->theCanonicalIsec();
       valueA = da->value;
-      isecB = db->isec;
+      isecB = db->theCanonicalIsec();
       valueB = db->value;
     } else {
       isecA = ra.referent.get<InputSection *>();
@@ -191,10 +191,10 @@ bool ICF::equalsVariable(const ConcatInputSection *ia,
       const auto *db = cast<Defined>(rb.referent.get<Symbol *>());
       if (da->isAbsolute())
         return true;
-      isecA = dyn_cast<ConcatInputSection>(da->isec);
+      isecA = dyn_cast<ConcatInputSection>(da->theCanonicalIsec());
       if (!isecA)
         return true; // literal sections were checked in equalsConstant.
-      isecB = cast<ConcatInputSection>(db->isec);
+      isecB = cast<ConcatInputSection>(db->theCanonicalIsec());
     } else {
       const auto *sa = ra.referent.get<InputSection *>();
       const auto *sb = rb.referent.get<InputSection *>();
@@ -212,7 +212,7 @@ bool ICF::equalsVariable(const ConcatInputSection *ia,
   // info matches. For simplicity, we only handle the case where there are only
   // symbols at offset zero within the section (which is typically the case with
   // .subsections_via_symbols.)
-  auto hasUnwind = [](Defined *d) { return d->unwindEntry != nullptr; };
+  auto hasUnwind = [](Defined *d) { return d->theCanUnwindEntry() != nullptr; };
   const auto *itA = llvm::find_if(ia->symbols, hasUnwind);
   const auto *itB = llvm::find_if(ib->symbols, hasUnwind);
   if (itA == ia->symbols.end())
@@ -221,8 +221,8 @@ bool ICF::equalsVariable(const ConcatInputSection *ia,
     return false;
   const Defined *da = *itA;
   const Defined *db = *itB;
-  if (da->unwindEntry->icfEqClass[icfPass % 2] !=
-          db->unwindEntry->icfEqClass[icfPass % 2] ||
+  if (da->theCanUnwindEntry()->icfEqClass[icfPass % 2] !=
+          db->theCanUnwindEntry()->icfEqClass[icfPass % 2] ||
       da->value != 0 || db->value != 0)
     return false;
   auto isZero = [](Defined *d) { return d->value == 0; };
@@ -289,13 +289,13 @@ void ICF::run() {
       for (const Reloc &r : isec->relocs) {
         if (auto *sym = r.referent.dyn_cast<Symbol *>()) {
           if (auto *defined = dyn_cast<Defined>(sym)) {
-            if (defined->isec) {
+            if (defined->theCanonicalIsec()) {
               if (auto *referentIsec =
-                      dyn_cast<ConcatInputSection>(defined->isec))
+                      dyn_cast<ConcatInputSection>(defined->theCanonicalIsec()))
                 hash += defined->value + referentIsec->icfEqClass[icfPass % 2];
               else
-                hash += defined->isec->kind() +
-                        defined->isec->getOffset(defined->value);
+                hash += defined->theCanonicalIsec()->kind() +
+                        defined->theCanonicalIsec()->getOffset(defined->value);
             } else {
               hash += defined->value;
             }
@@ -368,8 +368,8 @@ void ICF::segregate(size_t begin, size_t end, EqualsFn equals) {
 
 void macho::markSymAsAddrSig(Symbol *s) {
   if (auto *d = dyn_cast_or_null<Defined>(s))
-    if (d->isec)
-      d->isec->keepUnique = true;
+    if (d->theCanonicalIsec())
+      d->theCanonicalIsec()->keepUnique = true;
 }
 
 void macho::markAddrSigSymbols() {
@@ -430,8 +430,8 @@ void macho::foldIdenticalSections(bool onlyCfStrings) {
     if (isFoldable) {
       foldable.push_back(isec);
       for (Defined *d : isec->symbols)
-        if (d->unwindEntry)
-          foldable.push_back(d->unwindEntry);
+        if (d->theCanUnwindEntry())
+          foldable.push_back(d->theCanUnwindEntry());
 
       // Some sections have embedded addends that foil ICF's hashing / equality
       // checks. (We can ignore embedded addends when doing ICF because the same

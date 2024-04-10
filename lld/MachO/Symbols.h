@@ -129,7 +129,7 @@ public:
   bool isTlv() const override;
 
   bool isExternal() const { return external; }
-  bool isAbsolute() const { return isec == nullptr; }
+  bool isAbsolute() const { return originalIsec == nullptr; }
 
   uint64_t getVA() const override;
 
@@ -139,9 +139,20 @@ public:
 
   std::string getSourceLocation();
 
-  // Ensure this symbol's pointers to InputSections point to their canonical
-  // copies.
-  void canonicalize();
+  // Get the native InputSection of the symbol.
+  InputSection *theOriginalIsec() const { return originalIsec; }
+
+  // Get the canonical InputSection of the symbol.
+  InputSection *theCanonicalIsec() const;
+
+  // Get the native unwind of the symbol.
+  ConcatInputSection *theOriginalUnwindEntry() const { return originalUnwindEntry; }
+
+  // Get the canonical unwind entry of the symbol.
+  ConcatInputSection *theCanUnwindEntry() const;
+
+  void setIsec(InputSection *isec) { originalIsec = isec; }
+  void setUnwindEntry(ConcatInputSection *ue) { originalUnwindEntry = ue; }
 
   static bool classof(const Symbol *s) { return s->kind() == DefinedKind; }
 
@@ -181,15 +192,17 @@ private:
   const bool weakDef : 1;
   const bool external : 1;
 
+
+  // The native InputSection of the symbol. The symbol may be moved to another InputSection in which originalIsec->canonical() will point to the new InputSection
+  InputSection *originalIsec;
+  // This can be a subsection of either __compact_unwind or __eh_frame.
+  ConcatInputSection *originalUnwindEntry = nullptr;
 public:
-  InputSection *isec;
   // Contains the offset from the containing subsection. Note that this is
   // different from nlist::n_value, which is the absolute address of the symbol.
   uint64_t value;
   // size is only calculated for regular (non-bitcode) symbols.
   uint64_t size;
-  // This can be a subsection of either __compact_unwind or __eh_frame.
-  ConcatInputSection *unwindEntry = nullptr;
 };
 
 // This enum does double-duty: as a symbol property, it indicates whether & how
