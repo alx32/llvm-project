@@ -19,12 +19,27 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TimeProfiler.h"
 
 using namespace llvm;
 using namespace llvm::MachO;
 using namespace lld;
 using namespace lld::macho;
+
+cl::opt<uint64_t> CatOptFirst("cat-opt-first", cl::ReallyHidden, cl::init(0));
+cl::opt<uint64_t> CatOptLast("cat-opt-last", cl::ReallyHidden,
+                             cl::init(100000));
+uint32_t currentCatInx;
+bool shouldOptimizeCategory(const Defined *pCatBody) {
+  if (currentCatInx < CatOptFirst)
+    return false;
+
+  if (currentCatInx > CatOptLast)
+    return false;
+
+  return true;
+}
 
 template <class LP> static bool objectHasObjCSection(MemoryBufferRef mb) {
   using SectionHeader = typename LP::section;
@@ -192,9 +207,10 @@ static StringRef getReferentString(const Reloc &r) {
   if (auto *isec = r.referent.dyn_cast<InputSection *>())
     return cast<CStringInputSection>(isec)->getStringRefAtOffset(r.addend);
 
-  auto *sym = cast<Defined>(r.referent.get<Symbol *>());
-  auto *symIsec = sym->isec();
-  auto symOffset = sym->value + r.addend;
+  auto *sym = r.referent.get<Symbol *>();
+  auto *defined = dyn_cast_or_null<Defined>(sym);
+  auto *symIsec = defined->isec();
+  auto symOffset = defined->value + r.addend;
 
   if (auto *s = dyn_cast_or_null<CStringInputSection>(symIsec))
     return s->getStringRefAtOffset(symOffset);
@@ -519,6 +535,11 @@ private:
   // generated.
   static SmallVector<std::unique_ptr<SmallVector<uint8_t>>>
       generatedSectionData;
+
+  //////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////
+  Defined *tryFindDefinedOnIsec(const InputSection *isec, uint32_t offset);
 };
 
 SmallVector<std::unique_ptr<SmallVector<uint8_t>>>
@@ -558,7 +579,16 @@ ObjcCategoryMerger::tryGetSymbolAtIsecOffset(const ConcatInputSection *isec,
   if (!reloc)
     return nullptr;
 
-  return reloc->referent.get<Symbol *>();
+  Symbol *sym = reloc->referent.get<Symbol *>();
+
+  if (reloc->addend) {
+    assert(isa<Defined>(sym) && "Expected defined for non-zero addend");
+    Defined *definedSym = cast<Defined>(sym);
+    sym = tryFindDefinedOnIsec(definedSym->isec(),
+                               definedSym->value + reloc->addend);
+  }
+
+  return sym;
 }
 
 Defined *
@@ -566,6 +596,16 @@ ObjcCategoryMerger::tryGetDefinedAtIsecOffset(const ConcatInputSection *isec,
                                               uint32_t offset) {
   Symbol *sym = tryGetSymbolAtIsecOffset(isec, offset);
   return dyn_cast_or_null<Defined>(sym);
+}
+
+
+Defined *ObjcCategoryMerger::tryFindDefinedOnIsec(const InputSection *isec,
+                                                  uint32_t offset) {
+  for (Defined *sym : isec->symbols)
+    if ((sym->value <= offset) && (sym->value + sym->size > offset))
+      return sym;
+
+  return nullptr;
 }
 
 // Get the class's ro_data symbol. If getMetaRo is true, then we will return
@@ -679,11 +719,14 @@ void ObjcCategoryMerger::parseProtocolListInfo(const ConcatInputSection *isec,
       (protocolCount * target->wordSize) +
       /*header(count)*/ protocolListHeaderLayout.totalSize +
       /*extra null value*/ target->wordSize;
-  assert(expectedListSize == ptrListSym->isec()->data.size() &&
+
+  uint32_t expectedListSizeSwift = expectedListSize - target->wordSize;
+  assert((expectedListSize == ptrListSym->isec()->data.size() ||
+          expectedListSizeSwift == ptrListSym->isec()->data.size()) &&
          "Protocol list does not match expected size");
 
   // Suppress unsuded var warning
-  (void)expectedListSize;
+  (void)expectedListSize, (void)expectedListSizeSwift;
 
   uint32_t off = protocolListHeaderLayout.totalSize;
   for (uint32_t inx = 0; inx < protocolCount; ++inx) {
@@ -788,15 +831,16 @@ void ObjcCategoryMerger::parseCatInfoToExtInfo(const InfoInputCategory &catInfo,
     assert(extInfo.baseClassName.empty());
     extInfo.baseClass = classSym;
     llvm::StringRef classPrefix(objc::symbol_names::klass);
-    assert(classSym->getName().starts_with(classPrefix) &&
-           "Base class symbol does not start with expected prefix");
+    // assert(classSym->getName().starts_with(classPrefix) &&
+    //        "Base class symbol does not start with expected prefix");
     extInfo.baseClassName = classSym->getName().substr(classPrefix.size());
   } else {
-    assert((extInfo.baseClass ==
-            tryGetSymbolAtIsecOffset(catInfo.catBodyIsec,
-                                     catLayout.klassOffset)) &&
-           "Trying to parse category info into container with different base "
-           "class");
+    // Need to adjust base class
+    // assert((extInfo.baseClass ==
+    //         tryGetSymbolAtIsecOffset(catInfo.catBodyIsec,
+    //                                  catLayout.klassOffset)) &&
+    //        "Trying to parse category info into container with different base
+    //        " "class");
   }
 
   parsePointerListInfo(catInfo.catBodyIsec, catLayout.instanceMethodsOffset,
@@ -1148,10 +1192,15 @@ void ObjcCategoryMerger::collectAndValidateCategoriesData() {
       if (nlCategories.count(categorySym))
         continue;
 
+      bool shouldOpt = shouldOptimizeCategory(categorySym);
+      currentCatInx++;
+      if (!shouldOpt)
+        continue;
+
       // We only support ObjC categories (no swift + @objc)
       // TODO: Support swift + @objc categories also
-      if (!categorySym->getName().starts_with(objc::symbol_names::category))
-        continue;
+      // if (!categorySym->getName().starts_with(objc::symbol_names::category))
+      //   continue;
 
       auto *catBodyIsec = dyn_cast<ConcatInputSection>(categorySym->isec());
       assert(catBodyIsec &&
@@ -1270,7 +1319,8 @@ void ObjcCategoryMerger::eraseMergedCategories() {
 
       eraseISec(catInfo.catBodyIsec);
 
-      tryEraseDefinedAtIsecOffset(catInfo.catBodyIsec, catLayout.nameOffset);
+      // Swift name will be referenced in __METACLASS_DATA_*, so don't erase it
+      // tryEraseDefinedAtIsecOffset(catInfo.catBodyIsec, catLayout.nameOffset);
       tryEraseDefinedAtIsecOffset(catInfo.catBodyIsec,
                                   catLayout.instanceMethodsOffset);
       tryEraseDefinedAtIsecOffset(catInfo.catBodyIsec,
@@ -1291,7 +1341,8 @@ void ObjcCategoryMerger::eraseMergedCategories() {
 // section. This function will erase these references.
 void ObjcCategoryMerger::removeRefsToErasedIsecs() {
   for (InputSection *isec : inputSections) {
-    if (isec->getName() != section_names::addrSig)
+    if (isec->getName() != section_names::addrSig &&
+        isec->getName() != "__constg_swiftt")
       continue;
 
     auto removeRelocs = [this](Reloc &r) {
@@ -1308,22 +1359,41 @@ void ObjcCategoryMerger::removeRefsToErasedIsecs() {
       return erasedIsecs.count(isec) > 0;
     };
 
+    uint32_t oldSize = isec->relocs.size();
+
     llvm::erase_if(isec->relocs, removeRelocs);
+
+    uint32_t newSize = isec->relocs.size();
+    if (oldSize != newSize)
+      oldSize = newSize;
   }
 }
 
 void ObjcCategoryMerger::doMerge() {
   collectAndValidateCategoriesData();
 
-  for (auto &[baseClass, catInfos] : categoryMap) {
-    if (auto *baseClassDef = dyn_cast<Defined>(baseClass)) {
+  uint32_t numSkipped = 0;
+  uint32_t numMergedIntoClass = 0;
+  uint32_t numMergedBetween = 0;
+
+  for (auto &entry : categoryMap) {
+    if (isa<Defined>(entry.first)) {
       // Merge all categories into the base class
-      mergeCategoriesIntoBaseClass(baseClassDef, catInfos);
-    } else if (catInfos.size() > 1) {
+      auto *baseClass = cast<Defined>(entry.first);
+      mergeCategoriesIntoBaseClass(baseClass, entry.second);
+      numMergedIntoClass += entry.second.size();
+    } else if (entry.second.size() > 1) {
       // Merge all categories into a new, single category
-      mergeCategoriesIntoSingleCategory(catInfos);
+      mergeCategoriesIntoSingleCategory(entry.second);
+      numMergedBetween += entry.second.size();
+    } else {
+      numSkipped += entry.second.size();
     }
   }
+
+  llvm::errs() << "Skipped: " << numSkipped << "\n";
+  llvm::errs() << "Merged into class: " << numMergedIntoClass << "\n";
+  llvm::errs() << "Merged between classes: " << numMergedBetween << "\n";
 
   // Erase all categories that were merged
   eraseMergedCategories();

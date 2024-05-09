@@ -685,6 +685,8 @@ void Writer::scanRelocations() {
         // minuend, and doesn't have the usual UNSIGNED semantics. We don't want
         // to emit rebase opcodes for it.
         ++it;
+        if (it == isec->relocs.end())
+          break;
         // Canonicalize the referent so that later accesses in Writer won't
         // have to worry about it.
         if (auto *referentIsec = it->referent.dyn_cast<InputSection *>())
