@@ -1,7 +1,7 @@
 # REQUIRES: aarch64
 # RUN: rm -rf %t; split-file %s %t && cd %t
 
-## Create a dylib with a fake base class to link against
+## Create a dylib with a fake base class to link against when merging between categories
 # RUN: llvm-mc -filetype=obj -triple=arm64-apple-macos -o a64_fakedylib.o a64_fakedylib.s
 # RUN: %lld -arch arm64 a64_fakedylib.o -o a64_fakedylib.dylib -dylib
 
