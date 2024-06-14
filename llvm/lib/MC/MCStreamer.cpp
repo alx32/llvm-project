@@ -263,9 +263,10 @@ void MCStreamer::emitCFIMTETaggedFrame() {
 void MCStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                        unsigned Column, unsigned Flags,
                                        unsigned Isa, unsigned Discriminator,
-                                       StringRef FileName) {
+                                       StringRef FileName,
+                                       StringRef DebugLineLabelName) {
   getContext().setCurrentDwarfLoc(FileNo, Line, Column, Flags, Isa,
-                                  Discriminator);
+                                  Discriminator, DebugLineLabelName);
 }
 
 MCSymbol *MCStreamer::getDwarfLineTableSymbol(unsigned CUID) {

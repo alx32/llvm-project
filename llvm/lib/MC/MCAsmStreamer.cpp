@@ -283,8 +283,8 @@ public:
                                unsigned CUID = 0) override;
   void emitDwarfLocDirective(unsigned FileNo, unsigned Line, unsigned Column,
                              unsigned Flags, unsigned Isa,
-                             unsigned Discriminator,
-                             StringRef FileName) override;
+                             unsigned Discriminator, StringRef FileName,
+                             StringRef DebugLineLabelName) override;
   MCSymbol *getDwarfLineTableSymbol(unsigned CUID) override;
 
   bool emitCVFileDirective(unsigned FileNo, StringRef Filename,
@@ -1705,7 +1705,8 @@ void MCAsmStreamer::emitDwarfFile0Directive(
 void MCAsmStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                           unsigned Column, unsigned Flags,
                                           unsigned Isa, unsigned Discriminator,
-                                          StringRef FileName) {
+                                          StringRef FileName,
+                                          StringRef DebugLineLabelName) {
   // If target doesn't support .loc/.file directive, we need to record the lines
   // same way like we do in object mode.
   if (!MAI->usesDwarfFileAndLocDirectives()) {
@@ -1713,7 +1714,8 @@ void MCAsmStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
     // first one gets a line entry.
     MCDwarfLineEntry::make(this, getCurrentSectionOnly());
     this->MCStreamer::emitDwarfLocDirective(FileNo, Line, Column, Flags, Isa,
-                                            Discriminator, FileName);
+                                            Discriminator, FileName,
+                                            DebugLineLabelName);
     return;
   }
 
@@ -1749,7 +1751,8 @@ void MCAsmStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
   }
   EmitEOL();
   this->MCStreamer::emitDwarfLocDirective(FileNo, Line, Column, Flags, Isa,
-                                          Discriminator, FileName);
+                                          Discriminator, FileName,
+                                          DebugLineLabelName);
 }
 
 MCSymbol *MCAsmStreamer::getDwarfLineTableSymbol(unsigned CUID) {

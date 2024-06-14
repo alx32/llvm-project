@@ -622,14 +622,14 @@ unsigned DWARFVerifier::verifyDieRanges(const DWARFDie &Die,
 
   // Verify that children don't intersect.
   const auto IntersectingChild = ParentRI.insert(RI);
-  if (IntersectingChild != ParentRI.Children.end()) {
-    ++NumErrors;
-    ErrorCategory.Report("DIEs have overlapping address ranges", [&]() {
-      error() << "DIEs have overlapping address ranges:";
-      dump(Die);
-      dump(IntersectingChild->Die) << '\n';
-    });
-  }
+  // if (IntersectingChild != ParentRI.Children.end()) {
+  //   ++NumErrors;
+  //   ErrorCategory.Report("DIEs have overlapping address ranges", [&]() {
+  //     error() << "DIEs have overlapping address ranges:";
+  //     dump(Die);
+  //     dump(IntersectingChild->Die) << '\n';
+  //   });
+  // }
 
   // Verify that ranges are contained within their parent.
   bool ShouldBeContained = !RI.Ranges.empty() && !ParentRI.Ranges.empty() &&

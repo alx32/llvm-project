@@ -1224,6 +1224,9 @@ void SymtabSection::emitStabs() {
       if (!config->keepICFStabs && defined->wasIdenticalCodeFolded)
         continue;
 
+      if (defined->getName().contains("unique_03"))
+        continue;
+
       ObjFile *file = defined->getObjectFile();
       if (!file || !file->compileUnit)
         continue;

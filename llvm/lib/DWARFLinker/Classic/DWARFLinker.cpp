@@ -1515,6 +1515,12 @@ unsigned DWARFLinker::DIECloner::cloneScalarAttribute(
     return 0;
   }
 
+  // We can't patch anything here for DW_AT_META_stmt_sequence as the line table
+  // was not written yet
+  if (AttrSpec.Attr == dwarf::DW_AT_META_stmt_sequence) {
+    Value = Info.LineTableOffset;
+  }
+
   DIE::value_iterator Patch =
       Die.addValue(DIEAlloc, dwarf::Attribute(AttrSpec.Attr),
                    dwarf::Form(AttrSpec.Form), DIEInteger(Value));
@@ -1728,6 +1734,9 @@ DIE *DWARFLinker::DIECloner::cloneDIE(const DWARFDie &InputDIE,
   if (Die->getTag() == dwarf::DW_TAG_subprogram)
     PCOffset = Info.AddrAdjust;
   AttrInfo.PCOffset = PCOffset;
+
+  if (Die->getTag() == dwarf::DW_TAG_subprogram)
+    AttrInfo.LineTableOffset = Emitter->getLineSectionSize();
 
   if (Abbrev->getTag() == dwarf::DW_TAG_subprogram) {
     Flags |= TF_InFunctionScope;
@@ -2083,6 +2092,7 @@ static void insertLineSequence(std::vector<DWARFDebugLine::Row> &Seq,
 }
 
 static void patchStmtList(DIE &Die, DIEInteger Offset) {
+  Offset = Offset;
   for (auto &V : Die.values())
     if (V.getAttribute() == dwarf::DW_AT_stmt_list) {
       V = DIEValue(V.getAttribute(), V.getForm(), Offset);
@@ -2090,6 +2100,17 @@ static void patchStmtList(DIE &Die, DIEInteger Offset) {
     }
 
   llvm_unreachable("Didn't find DW_AT_stmt_list in cloned DIE!");
+}
+
+static void patchStmtSequence(DIE &Die, DIEInteger Offset) {
+  Offset = Offset;
+  for (auto &V : Die.values())
+    if (V.getAttribute() == dwarf::DW_AT_META_stmt_sequence) {
+      V = DIEValue(V.getAttribute(), V.getForm(), Offset);
+      return;
+    }
+
+  llvm_unreachable("Didn't find DW_AT_META_stmt_sequence in cloned DIE!");
 }
 
 void DWARFLinker::DIECloner::rememberUnitForMacroOffset(CompileUnit &Unit) {
@@ -2119,6 +2140,13 @@ void DWARFLinker::DIECloner::generateLineTableForUnit(CompileUnit &Unit) {
   if (!StmtList)
     return;
 
+  for (auto &Child : CUDie.children()) {
+    if (Child.getTag() != dwarf::DW_TAG_subprogram)
+      continue;
+    auto found = Child.find(dwarf::DW_AT_META_stmt_sequence);
+    found = found;
+  }
+
   // Update the cloned DW_AT_stmt_list with the correct debug_line offset.
   if (auto *OutputDIE = Unit.getOutputUnitDIE())
     patchStmtList(*OutputDIE, DIEInteger(Emitter->getLineSectionSize()));
@@ -2126,6 +2154,7 @@ void DWARFLinker::DIECloner::generateLineTableForUnit(CompileUnit &Unit) {
   if (const DWARFDebugLine::LineTable *LT =
           ObjFile.Dwarf->getLineTableForUnit(&Unit.getOrigUnit())) {
 
+    // With the new line table, translate the row addresses
     DWARFDebugLine::LineTable LineTable;
 
     // Set Line Table header.
@@ -2209,6 +2238,9 @@ void DWARFLinker::DIECloner::generateLineTableForUnit(CompileUnit &Unit) {
 
     Emitter->emitLineTableForUnit(LineTable, Unit, DebugStrPool,
                                   DebugLineStrPool);
+
+    // We have the old rows and new rows, need to update
+    // DW_AT_META_stmt_sequence by translating addresses
   } else
     Linker.reportWarning("Cann't load line table.", ObjFile);
 }

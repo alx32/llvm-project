@@ -170,6 +170,12 @@ static cl::opt<DwarfDebug::MinimizeAddrInV5> MinimizeAddrInV5Option(
                           "Stuff")),
     cl::init(DwarfDebug::MinimizeAddrInV5::Default));
 
+static cl::opt<bool> EmitFuncLineTableOffsetsOption(
+    "emit-func-debug-line-table-offsets", cl::Hidden,
+    cl::desc("Include line table offset in function debug info and emit end "
+             "sequence after each function."),
+    cl::init(false));
+
 static constexpr unsigned ULEB128PadSize = 4;
 
 void DebugLocDwarfExpression::emitOp(uint8_t Op, const char *Comment) {
@@ -440,6 +446,9 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
   Asm->OutStreamer->getContext().setDwarfVersion(DwarfVersion);
   Asm->OutStreamer->getContext().setDwarfFormat(Dwarf64 ? dwarf::DWARF64
                                                         : dwarf::DWARF32);
+
+  Asm->OutStreamer->setGenerateFuncLineTableOffsets(
+      EmitFuncLineTableOffsetsOption);
 }
 
 // Define out of line so we don't have to include DwarfUnit.h in DwarfDebug.h.
@@ -2211,6 +2220,7 @@ DebugLoc DwarfDebug::emitInitialLocDirective(const MachineFunction &MF,
   }
   return DebugLoc();
 }
+extern MCSymbol *firstLineSym;
 
 // Gather pre-function debug information.  Assumes being called immediately
 // after the function entry point has been emitted.
@@ -2221,6 +2231,8 @@ void DwarfDebug::beginFunctionImpl(const MachineFunction *MF) {
   assert(LScopes.empty() || SP == LScopes.getCurrentFunctionScope()->getScopeNode());
   if (SP->getUnit()->getEmissionKind() == DICompileUnit::NoDebug)
     return;
+
+  firstLineSym = nullptr;
 
   DwarfCompileUnit &CU = getOrCreateDwarfCompileUnit(SP->getUnit());
 
@@ -2250,7 +2262,8 @@ void DwarfDebug::terminateLineTable(const DwarfCompileUnit *CU) {
       getDwarfCompileUnitIDForLineTable(*CU));
   // Add the last range label for the given CU.
   LineTable.getMCLineSections().addEndEntry(
-      const_cast<MCSymbol *>(CURanges.back().End));
+      const_cast<MCSymbol *>(CURanges.back().End),
+      Asm->OutStreamer->getGenerateFuncLineTableOffsets());
 }
 
 void DwarfDebug::skippedNonDebugFunction() {
@@ -2342,6 +2355,20 @@ void DwarfDebug::endFunctionImpl(const MachineFunction *MF) {
 
   // Construct call site entries.
   constructCallSiteEntryDIEs(*SP, TheCU, ScopeDIE, *MF);
+
+  // if (Asm->OutStreamer->getGenerateFuncLineTableOffsets()) {
+  //   MCSymbol *LineSym = Asm->OutStreamer->getContext().createTempSymbol();
+  //   Asm->OutStreamer->emitLabel(LineSym);
+  //   MCDwarfLoc DwarfLoc(
+  //       1, 1, 0, DWARF2_LINE_DEFAULT_IS_STMT ? DWARF2_FLAG_IS_STMT : 0, 0,
+  //       0);
+  //   MCDwarfLineEntry LineEntry(LineSym, DwarfLoc, /*IsEndOfFunction*/ true);
+  //   Asm->OutStreamer->getContext()
+  //       .getMCDwarfLineTable(
+  //           Asm->OutStreamer->getContext().getDwarfCompileUnitID())
+  //       .getMCLineSections()
+  //       .addLineEntry(LineEntry, Asm->OutStreamer->getCurrentSectionOnly());
+  // }
 
   // Clear debug info
   // Ownership of DbgVariables is a bit subtle - ScopeVariables owns all the

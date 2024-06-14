@@ -741,14 +741,15 @@ public:
   /// in the line number table with this information and the address of the
   /// instruction will be created.
   void setCurrentDwarfLoc(unsigned FileNum, unsigned Line, unsigned Column,
-                          unsigned Flags, unsigned Isa,
-                          unsigned Discriminator) {
+                          unsigned Flags, unsigned Isa, unsigned Discriminator,
+                          StringRef DebugLineLabelName) {
     CurrentDwarfLoc.setFileNum(FileNum);
     CurrentDwarfLoc.setLine(Line);
     CurrentDwarfLoc.setColumn(Column);
     CurrentDwarfLoc.setFlags(Flags);
     CurrentDwarfLoc.setIsa(Isa);
     CurrentDwarfLoc.setDiscriminator(Discriminator);
+    CurrentDwarfLoc.setDebugLineLabelName(DebugLineLabelName);
     DwarfLocSeen = true;
   }
 

@@ -579,6 +579,8 @@ void DWARFDebugLine::ParsingState::appendRowToMatrix() {
     Sequence.LowPC = Row.Address.Address;
     Sequence.FirstRowIndex = RowNumber;
   }
+  // This is where DWARF Linker adds a row - we can use this for tracking
+  // address translation
   LineTable->appendRow(Row);
   if (Row.EndSequence) {
     // Record the end of instruction sequence.
@@ -850,6 +852,7 @@ Error DWARFDebugLine::LineTable::parse(
   }
   bool TombstonedAddress = false;
   auto EmitRow = [&] {
+    // Emmit a new ROW callback
     if (!TombstonedAddress) {
       if (Verbose) {
         *OS << "\n";

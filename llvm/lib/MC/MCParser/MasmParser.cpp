@@ -2707,7 +2707,7 @@ bool MasmParser::parseStatement(ParseStatementInfo &Info,
     getStreamer().emitDwarfLocDirective(
         getContext().getGenDwarfFileNumber(), Line, 0,
         DWARF2_LINE_DEFAULT_IS_STMT ? DWARF2_FLAG_IS_STMT : 0, 0, 0,
-        StringRef());
+        StringRef(), StringRef());
   }
 
   // If parsing succeeded, match the instruction.
@@ -4992,7 +4992,8 @@ bool MasmParser::parseDirectiveLoc() {
     return true;
 
   getStreamer().emitDwarfLocDirective(FileNumber, LineNumber, ColumnPos, Flags,
-                                      Isa, Discriminator, StringRef());
+                                      Isa, Discriminator, StringRef(),
+                                      StringRef());
 
   return false;
 }

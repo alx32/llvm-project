@@ -110,6 +110,7 @@ class MCDwarfLoc {
   uint8_t Flags;
   uint8_t Isa;
   uint32_t Discriminator;
+  StringRef DebugLineLabelName;
 
 // Flag that indicates the initial value of the is_stmt_start flag.
 #define DWARF2_LINE_DEFAULT_IS_STMT 1
@@ -122,6 +123,7 @@ class MCDwarfLoc {
 private: // MCContext manages these
   friend class MCContext;
   friend class MCDwarfLineEntry;
+  friend class DwarfDebug;
 
   MCDwarfLoc(unsigned fileNum, unsigned line, unsigned column, unsigned flags,
              unsigned isa, unsigned discriminator)
@@ -178,6 +180,10 @@ public:
   void setDiscriminator(unsigned discriminator) {
     Discriminator = discriminator;
   }
+
+  void setDebugLineLabelName(StringRef debugLineLabelName) {
+    DebugLineLabelName = debugLineLabelName;
+  }
 };
 
 /// Instances of this class represent the line information for
@@ -193,14 +199,23 @@ private:
   // for an MCDwarfLineEntry object.
 
 public:
+  MCSymbol *LineStreamLabel;
   // Constructor to create an MCDwarfLineEntry given a symbol and the dwarf loc.
-  MCDwarfLineEntry(MCSymbol *label, const MCDwarfLoc loc)
-      : MCDwarfLoc(loc), Label(label) {}
+  MCDwarfLineEntry(MCSymbol *label, const MCDwarfLoc loc,
+                   bool isEndOfFunction = false,
+                   MCSymbol *lineStreamLabel = nullptr)
+      : MCDwarfLoc(loc), Label(label), LineStreamLabel(lineStreamLabel),
+        IsEndOfFunction(isEndOfFunction) {}
 
   MCSymbol *getLabel() const { return Label; }
 
   // This indicates the line entry is synthesized for an end entry.
   bool IsEndEntry = false;
+
+  // This indicated that the current line entry denotes the end of a function,
+  // it is used to emit a DW_LNE_end_sequnece to reset the state machine
+  // registers.
+  bool IsEndOfFunction;
 
   // Override the label with the given EndLabel.
   void setEndLabel(MCSymbol *EndLabel) {
@@ -227,7 +242,7 @@ public:
 
   // Add an end entry by cloning the last entry, if exists, for the section
   // the given EndLabel belongs to. The label is replaced by the given EndLabel.
-  void addEndEntry(MCSymbol *EndLabel);
+  void addEndEntry(MCSymbol *EndLabel, bool generatingFuncLineTableOffsets);
 
   using MCDwarfLineEntryCollection = std::vector<MCDwarfLineEntry>;
   using iterator = MCDwarfLineEntryCollection::iterator;

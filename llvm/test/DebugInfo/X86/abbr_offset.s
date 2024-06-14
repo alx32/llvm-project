@@ -4,7 +4,7 @@
 # This test simulates the result of ld -r. That produces files where
 # abbr_offset is not zero.
 
-# CHECK: abbr_offset = 0x0000
+# CHECK: abbr_offset = 0x0000zzzz
 # CHECK: abbr_offset = 0x0008
 
        	.section	.debug_abbrev,"",@progbits

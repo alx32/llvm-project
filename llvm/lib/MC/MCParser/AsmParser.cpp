@@ -2368,7 +2368,7 @@ bool AsmParser::parseAndMatchAndEmitTargetInstruction(ParseStatementInfo &Info,
     getStreamer().emitDwarfLocDirective(
         getContext().getGenDwarfFileNumber(), Line, 0,
         DWARF2_LINE_DEFAULT_IS_STMT ? DWARF2_FLAG_IS_STMT : 0, 0, 0,
-        StringRef());
+        StringRef(), StringRef());
   }
 
   // If parsing succeeded, match the instruction.
@@ -3673,6 +3673,7 @@ bool AsmParser::parseDirectiveLoc() {
   unsigned Flags = PrevFlags & DWARF2_FLAG_IS_STMT;
   unsigned Isa = 0;
   int64_t Discriminator = 0;
+  StringRef DebugLineLabelName;
 
   auto parseLocOp = [&]() -> bool {
     StringRef Name;
@@ -3686,7 +3687,13 @@ bool AsmParser::parseDirectiveLoc() {
       Flags |= DWARF2_FLAG_PROLOGUE_END;
     else if (Name == "epilogue_begin")
       Flags |= DWARF2_FLAG_EPILOGUE_BEGIN;
-    else if (Name == "is_stmt") {
+    else if (Name == "debug_line_label") {
+      Loc = getTok().getLoc();
+
+      if (parseIdentifier(DebugLineLabelName))
+        return TokError("unexpected token in '.loc' directive label name");
+
+    } else if (Name == "is_stmt") {
       Loc = getTok().getLoc();
       const MCExpr *Value;
       if (parseExpression(Value))
@@ -3730,7 +3737,8 @@ bool AsmParser::parseDirectiveLoc() {
     return true;
 
   getStreamer().emitDwarfLocDirective(FileNumber, LineNumber, ColumnPos, Flags,
-                                      Isa, Discriminator, StringRef());
+                                      Isa, Discriminator, StringRef(),
+                                      DebugLineLabelName);
 
   return false;
 }

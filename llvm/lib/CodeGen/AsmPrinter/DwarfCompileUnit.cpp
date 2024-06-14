@@ -434,6 +434,9 @@ void DwarfCompileUnit::addRange(RangeSpan Range) {
   CURanges.back().End = Range.End;
 }
 
+extern MCSymbol *firstLineSym;
+extern MCSymbol *firstHeaderStartSym;
+
 void DwarfCompileUnit::initStmtList() {
   if (CUNode->isDebugDirectivesOnly())
     return;
@@ -525,6 +528,15 @@ DIE &DwarfCompileUnit::updateSubprogramScopeDIE(const DISubprogram *SP) {
       !DD->getCurrentFunction()->getTarget().Options.DisableFramePointerElim(
           *DD->getCurrentFunction()))
     addFlag(*SPDie, dwarf::DW_AT_APPLE_omit_frame_ptr);
+
+  if (Asm->OutStreamer->getGenerateFuncLineTableOffsets()) {
+    addSectionLabel(*SPDie, dwarf::DW_AT_META_stmt_sequence, firstLineSym,
+                    firstHeaderStartSym);
+  }
+
+  if (firstLineSym) {
+    firstLineSym = nullptr;
+  }
 
   // Only include DW_AT_frame_base in full debug info
   if (!includeMinimalInlineScopes()) {

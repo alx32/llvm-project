@@ -254,6 +254,8 @@ class MCStreamer {
   /// discussion for future inclusion.
   bool AllowAutoPadding = false;
 
+  bool GenerateFuncLineTableOffsets = false;
+
 protected:
   MCStreamer(MCContext &Ctx);
 
@@ -309,6 +311,13 @@ public:
 
   void setAllowAutoPadding(bool v) { AllowAutoPadding = v; }
   bool getAllowAutoPadding() const { return AllowAutoPadding; }
+
+  void setGenerateFuncLineTableOffsets(bool v) {
+    GenerateFuncLineTableOffsets = v;
+  }
+  bool getGenerateFuncLineTableOffsets() const {
+    return GenerateFuncLineTableOffsets;
+  }
 
   /// When emitting an object file, create and emit a real label. When emitting
   /// textual assembly, this should do nothing to avoid polluting our output.
@@ -947,7 +956,8 @@ public:
   virtual void emitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                      unsigned Column, unsigned Flags,
                                      unsigned Isa, unsigned Discriminator,
-                                     StringRef FileName);
+                                     StringRef FileName,
+                                     StringRef DebugLineLabelName);
 
   /// Associate a filename with a specified logical file number, and also
   /// specify that file's checksum information.  This implements the '.cv_file 4

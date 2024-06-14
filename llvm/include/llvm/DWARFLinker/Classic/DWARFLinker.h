@@ -622,6 +622,9 @@ private:
       /// Offset to apply to PC addresses inside a function.
       int64_t PCOffset = 0;
 
+      /// Offset to apply to line tables.
+      int32_t LineTableOffset = 0;
+
       /// Does the DIE have a low_pc attribute?
       bool HasLowPc = false;
 

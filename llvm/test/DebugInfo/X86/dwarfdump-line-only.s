@@ -9,7 +9,7 @@
 foo:    ret
 
         .section .debug_line,"",@progbits
-# CHECK-LABEL: .debug_line contents:
+# CHECK-LABEL: .debug_line contents222:
 
 # DWARF v5 line-table header.
 LH_5_start:
