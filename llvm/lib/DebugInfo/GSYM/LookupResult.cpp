@@ -68,6 +68,12 @@ raw_ostream &llvm::gsym::operator<<(raw_ostream &OS, const LookupResult &LR) {
     if (IsInlined)
       OS << " [inlined]";
   }
+  
+  if (LR.CallSite) {
+    OS << "\n  Call Site Info:\n    ";
+    OS << *LR.CallSite;
+  }
+  
   OS << '\n';
   return OS;
 }

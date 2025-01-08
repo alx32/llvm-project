@@ -10,6 +10,8 @@
 # RUN: llvm-gsymutil %t/call_sites_dSYM.gsym | FileCheck --check-prefix=CHECK-MERGED-CALLSITES %s
 # RUN: llvm-gsymutil %t/dwarf_call_sites_dSYM.gsym | FileCheck --check-prefix=CHECK-MERGED-CALLSITES %s
 
+# RUN: exit 1
+
 # CHECK-MERGED-CALLSITES:      FunctionInfo @ 0x[[#%x,FUNC4_1:]]: [0x[[#%x,FUNC4_1_START:]] - 0x[[#%x,FUNC4_1_END:]]) "function4_copy1"
 # CHECK-MERGED-CALLSITES:      ++ Merged FunctionInfos[0]:
 # CHECK-MERGED-CALLSITES-NEXT:     [0x[[#%x,FUNC4_2_START:]] - 0x[[#%x,FUNC4_2_END:]]) "function4_copy2"

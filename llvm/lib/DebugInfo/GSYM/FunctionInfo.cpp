@@ -300,6 +300,20 @@ FunctionInfo::lookup(DataExtractor &Data, const GsymReader &GR,
         // we have a line entry.
         InlineInfoData = InfoData;
         break;
+      
+      case InfoType::CallSiteInfo:
+        
+      if (auto CSIC = CallSiteInfoCollection::decode(InfoData)) {
+        // Find matching call site based on relative offset
+        for (const auto &CS : CSIC->CallSites) {
+          if (CS.ReturnOffset == Addr - FuncAddr) {
+            LR.CallSite = CS;
+            break;
+          }
+        }
+      } else {
+        return CSIC.takeError();
+      }
 
       default:
         break;
