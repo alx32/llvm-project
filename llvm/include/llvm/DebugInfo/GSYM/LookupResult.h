@@ -49,9 +49,9 @@ struct LookupResult {
   /// deepest inline function will appear at index zero in the source locations
   /// array, and the concrete function will appear at the end of the array.
   SourceLocations Locations;
-  /// Call site info for the lookup address, if it exists
-  std::optional<CallSiteInfo> CallSite; 
-  
+  ///< Function name regex patterns for call site
+  std::vector<StringRef> CallSiteFuncRegex;
+
   std::string getSourceFile(uint32_t Index) const;
 };
 
@@ -62,7 +62,7 @@ inline bool operator==(const LookupResult &LHS, const LookupResult &RHS) {
     return false;
   if (LHS.FuncName != RHS.FuncName)
     return false;
-  if ((LHS.CallSite.has_value() != RHS.CallSite.has_value()) && *LHS.CallSite != *RHS.CallSite)
+  if (LHS.CallSiteFuncRegex != RHS.CallSiteFuncRegex)
     return false;
   return LHS.Locations == RHS.Locations;
 }

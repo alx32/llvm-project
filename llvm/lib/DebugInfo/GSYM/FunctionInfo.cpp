@@ -307,7 +307,10 @@ FunctionInfo::lookup(DataExtractor &Data, const GsymReader &GR,
         // Find matching call site based on relative offset
         for (const auto &CS : CSIC->CallSites) {
           if (CS.ReturnOffset == Addr - FuncAddr) {
-            LR.CallSite = CS;
+            // Get regex patterns
+            for (uint32_t RegexOffset : CS.MatchRegex) {
+              LR.CallSiteFuncRegex.push_back(GR.getString(RegexOffset));
+            }
             break;
           }
         }

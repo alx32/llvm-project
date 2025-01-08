@@ -526,6 +526,8 @@ static void doLookup(GsymReader &Gsym, uint64_t Addr, raw_ostream &OS) {
     }
   } else { /* UseMergedFunctions == false */
     if (auto Result = Gsym.lookup(Addr)) {
+      // Don't print call site info if --merged-functions is not specified.
+      Result->CallSiteFuncRegex.clear();
       OS << Result.get();
     } else {
       logError(Result.takeError());
