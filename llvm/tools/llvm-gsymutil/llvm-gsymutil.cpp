@@ -104,6 +104,10 @@ static std::string CallSiteYamlPath;
 static std::vector<std::string> MergedFunctionsFilters;
 static bool Stats = false;
 
+// Forward declarations
+static llvm::Error processStatsForFile(StringRef Filename);
+static llvm::Error processStatsForDirectory(StringRef DirPath);
+
 static void parseArgs(int argc, char **argv) {
   GSYMUtilOptTable Tbl;
   llvm::StringRef ToolName = argv[0];
@@ -221,7 +225,7 @@ static void parseArgs(int argc, char **argv) {
     // Stats mode has specific requirements - must specify exactly one input
     // file and no other options
     if (InputFilenames.size() != 1) {
-      llvm::errs() << "error: --stats requires exactly one input file.\n";
+      llvm::errs() << "error: --stats requires exactly one input file or directory.\n";
       std::exit(1);
     }
 
@@ -618,6 +622,216 @@ static void doLookup(GsymReader &Gsym, uint64_t Addr, raw_ostream &OS) {
   }
 }
 
+static llvm::Error processStatsForFile(StringRef Filename) {
+  // Start timing
+  sys::TimePoint<> StartTime = std::chrono::system_clock::now();
+
+  // Load the GSYM file
+  ErrorOr<std::unique_ptr<MemoryBuffer>> BuffOrErr =
+      MemoryBuffer::getFile(Filename);
+  if (!BuffOrErr) {
+    return createStringError(BuffOrErr.getError(), 
+                            "failed to open '%s'", Filename.str().c_str());
+  }
+  std::unique_ptr<MemoryBuffer> Buffer = std::move(BuffOrErr.get());
+
+  // Parse the GSYM file
+  Expected<GsymReader> GsymOrErr =
+      GsymReader::copyBuffer(Buffer->getBuffer());
+  if (!GsymOrErr) {
+    return GsymOrErr.takeError();
+  }
+  GsymReader &Gsym = *GsymOrErr;
+
+  // Statistics counters
+  uint64_t NumMergedFunctions = 0;
+  uint64_t NumNonMergedFunctions = 0;
+  uint64_t NumOutlinedMergedFunctions = 0;
+  uint64_t NumNonOutlinedMergedFunctions = 0;
+  uint64_t NumOutlinedNonMergedFunctions = 0;
+  uint64_t NumNonOutlinedNonMergedFunctions = 0;
+  uint64_t NumTopLevelWithMerged = 0;
+  uint64_t NumTopLevelWithoutMerged = 0;
+  uint64_t NumOutlinedTopLevelWithMerged = 0;
+  uint64_t NumNonOutlinedTopLevelWithMerged = 0;
+  uint64_t NumOutlinedTopLevelWithoutMerged = 0;
+  uint64_t NumNonOutlinedTopLevelWithoutMerged = 0;
+  uint64_t NumBeforeFirstMerged = 0;
+  uint64_t MaxGapBetweenMerged = 0;
+  uint64_t CurrentGap = 0;
+  bool FoundFirstMerged = false;
+
+  // Process all addresses
+  const uint32_t NumAddresses = Gsym.getNumAddresses();
+  for (uint32_t AddrIdx = 0; AddrIdx < NumAddresses; ++AddrIdx) {
+    auto Addr = Gsym.getAddress(AddrIdx);
+    if (!Addr)
+      continue;
+
+    // Get the function info for this address
+    Expected<FunctionInfo> FIOrErr = Gsym.getFunctionInfoAtIndex(AddrIdx);
+    if (!FIOrErr) {
+      consumeError(FIOrErr.takeError());
+      continue;
+    }
+
+    FunctionInfo &FI = *FIOrErr;
+    const bool HasMergedFunctions = FI.MergedFunctions.has_value();
+    const bool IsOutlined =
+        Gsym.getString(FI.Name).contains("OUTLINED_FUNCTION_");
+
+    // Handle top-level function info
+    if (HasMergedFunctions) {
+      NumTopLevelWithMerged++;
+      if (IsOutlined)
+        NumOutlinedTopLevelWithMerged++;
+      else
+        NumNonOutlinedTopLevelWithMerged++;
+
+      // Count the parent function as a merged function too
+      NumMergedFunctions++;
+      if (IsOutlined)
+        NumOutlinedMergedFunctions++;
+      else
+        NumNonOutlinedMergedFunctions++;
+
+      // Count each merged function
+      const auto &MergedFuncs = FI.MergedFunctions->MergedFunctions;
+      NumMergedFunctions += MergedFuncs.size();
+
+      // Count outlined vs non-outlined merged functions
+      for (const auto &MergedFI : MergedFuncs) {
+        if (Gsym.getString(MergedFI.Name).contains("OUTLINED_FUNCTION_"))
+          NumOutlinedMergedFunctions++;
+        else
+          NumNonOutlinedMergedFunctions++;
+      }
+
+      // Update gap tracking
+      if (!FoundFirstMerged) {
+        NumBeforeFirstMerged = AddrIdx;
+        FoundFirstMerged = true;
+      } else {
+        MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
+      }
+      CurrentGap = 0;
+    } else {
+      NumTopLevelWithoutMerged++;
+      if (IsOutlined)
+        NumOutlinedTopLevelWithoutMerged++;
+      else
+        NumNonOutlinedTopLevelWithoutMerged++;
+
+      NumNonMergedFunctions++;
+      if (IsOutlined)
+        NumOutlinedNonMergedFunctions++;
+      else
+        NumNonOutlinedNonMergedFunctions++;
+
+      if (FoundFirstMerged)
+        CurrentGap++;
+    }
+  }
+
+  // Update max gap if the last functions don't have merged info
+  if (FoundFirstMerged)
+    MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
+
+  // Calculate timing
+  sys::TimePoint<> EndTime = std::chrono::system_clock::now();
+  std::chrono::duration<double, std::milli> Duration = EndTime - StartTime;
+
+  // Calculate total functions and percentages
+  uint64_t TotalFunctions = NumMergedFunctions + NumNonMergedFunctions;
+  uint64_t TotalOutlinedFunctions =
+      NumOutlinedMergedFunctions + NumOutlinedNonMergedFunctions;
+  uint64_t TotalNonOutlinedFunctions =
+      NumNonOutlinedMergedFunctions + NumNonOutlinedNonMergedFunctions;
+
+  double PercentMerged =
+      TotalFunctions > 0 ? (double)NumMergedFunctions / TotalFunctions * 100.0
+                         : 0.0;
+  double PercentOutlinedMerged = TotalOutlinedFunctions > 0
+                                     ? (double)NumOutlinedMergedFunctions /
+                                           TotalOutlinedFunctions * 100.0
+                                     : 0.0;
+  double PercentNonOutlinedMerged =
+      TotalNonOutlinedFunctions > 0 ? (double)NumNonOutlinedMergedFunctions /
+                                          TotalNonOutlinedFunctions * 100.0
+                                    : 0.0;
+
+  // Print statistics
+  outs() << "GSYM File Statistics for " << Filename << "\n";
+  outs() << "Time taken to collect statistics: "
+     << format("%.2f", Duration.count()) << " ms\n\n";
+
+  // Format the statistics table
+  outs() << "Statistic                         Total    Outline   Non-Outline\n";
+  outs() << "------------------------------   --------  --------  -----------\n";
+  outs() << format("All Merged Functions            %8" PRIu64 "  %8" PRIu64
+               "  %11" PRIu64 "\n",
+               NumMergedFunctions, NumOutlinedMergedFunctions,
+               NumNonOutlinedMergedFunctions);
+  outs() << format("All Non-Merged Functions        %8" PRIu64 "  %8" PRIu64
+               "  %11" PRIu64 "\n",
+               NumNonMergedFunctions, NumOutlinedNonMergedFunctions,
+               NumNonOutlinedNonMergedFunctions);
+  outs() << format("All Percentage Merged           %8.1f%%  %8.1f%%  %11.1f%%\n",
+               PercentMerged, PercentOutlinedMerged,
+               PercentNonOutlinedMerged);
+  outs() << format("Top-Level with MergedInfo       %8" PRIu64 "  %8" PRIu64
+               "  %11" PRIu64 "\n",
+               NumTopLevelWithMerged, NumOutlinedTopLevelWithMerged,
+               NumNonOutlinedTopLevelWithMerged);
+  outs() << format("Top-Level without MergedInfo    %8" PRIu64 "  %8" PRIu64
+               "  %11" PRIu64 "\n",
+               NumTopLevelWithoutMerged, NumOutlinedTopLevelWithoutMerged,
+               NumNonOutlinedTopLevelWithoutMerged);
+
+  outs() << "\nFunctionInfo Vector Analysis:\n";
+  outs() << format("Functions before first MergedInfo: %" PRIu64 "\n",
+               NumBeforeFirstMerged);
+  outs() << format("Maximum gap between MergedInfo: %" PRIu64 "\n",
+               MaxGapBetweenMerged);
+               
+  return Error::success();
+}
+
+static llvm::Error processStatsForDirectory(StringRef DirPath) {
+  std::error_code EC;
+  SmallString<256> Path(DirPath);
+  sys::path::append(Path, "");
+  bool FoundAnyFiles = false;
+  
+  auto processGsymFile = [&](StringRef FilePath) -> Error {
+    // Ignore case when checking for .gsym extension
+    StringRef Extension = sys::path::extension(FilePath);
+    if (Extension.size() >= 5 && // .gsym has 5 characters
+        Extension.equals_insensitive(".gsym")) {
+      FoundAnyFiles = true;
+      if (Error Err = processStatsForFile(FilePath))
+        return Err;
+      outs() << "\n"; // Add separation between files
+    }
+    return Error::success();
+  };
+  
+  // Recursively walk the directory
+  for (sys::fs::recursive_directory_iterator I(Path, EC), E;
+       I != E && !EC; I.increment(EC)) {
+    if (Error Err = processGsymFile(I->path()))
+      return Err;
+  }
+  
+  if (EC)
+    return createStringError(EC, "failed to iterate directory '%s'", DirPath.str().c_str());
+  
+  if (!FoundAnyFiles)
+    outs() << "No .gsym files found in directory: " << DirPath << "\n";
+  
+  return Error::success();
+}
+
 int llvm_gsymutil_main(int argc, char **argv, const llvm::ToolContext &) {
   // Print a stack trace if we signal out.
   sys::PrintStackTraceOnErrorSignal(argv[0]);
@@ -631,177 +845,29 @@ int llvm_gsymutil_main(int argc, char **argv, const llvm::ToolContext &) {
   raw_ostream &OS = outs();
 
   if (Stats) {
-    // Start timing
-    sys::TimePoint<> StartTime = std::chrono::system_clock::now();
-
-    // Load the GSYM file
-    ErrorOr<std::unique_ptr<MemoryBuffer>> BuffOrErr =
-        MemoryBuffer::getFile(InputFilenames[0]);
-    if (!BuffOrErr) {
-      error(InputFilenames[0], BuffOrErr.getError());
+    StringRef Path = InputFilenames[0];
+    sys::fs::file_status Status;
+    if (std::error_code EC = sys::fs::status(Path, Status)) {
+      llvm::errs() << "error: cannot stat '" << Path << "': " << EC.message() << "\n";
       return 1;
     }
-    std::unique_ptr<MemoryBuffer> Buffer = std::move(BuffOrErr.get());
-
-    // Parse the GSYM file
-    Expected<GsymReader> GsymOrErr =
-        GsymReader::copyBuffer(Buffer->getBuffer());
-    if (!GsymOrErr) {
-      error("failed to parse GSYM file", GsymOrErr.takeError());
-      return 1;
-    }
-    GsymReader &Gsym = *GsymOrErr;
-
-    // Statistics counters
-    uint64_t NumMergedFunctions = 0;
-    uint64_t NumNonMergedFunctions = 0;
-    uint64_t NumOutlinedMergedFunctions = 0;
-    uint64_t NumNonOutlinedMergedFunctions = 0;
-    uint64_t NumOutlinedNonMergedFunctions = 0;
-    uint64_t NumNonOutlinedNonMergedFunctions = 0;
-    uint64_t NumTopLevelWithMerged = 0;
-    uint64_t NumTopLevelWithoutMerged = 0;
-    uint64_t NumOutlinedTopLevelWithMerged = 0;
-    uint64_t NumNonOutlinedTopLevelWithMerged = 0;
-    uint64_t NumOutlinedTopLevelWithoutMerged = 0;
-    uint64_t NumNonOutlinedTopLevelWithoutMerged = 0;
-    uint64_t NumBeforeFirstMerged = 0;
-    uint64_t MaxGapBetweenMerged = 0;
-    uint64_t CurrentGap = 0;
-    bool FoundFirstMerged = false;
-
-    // Process all addresses
-    const uint32_t NumAddresses = Gsym.getNumAddresses();
-    for (uint32_t AddrIdx = 0; AddrIdx < NumAddresses; ++AddrIdx) {
-      auto Addr = Gsym.getAddress(AddrIdx);
-      if (!Addr)
-        continue;
-
-      // Get the function info for this address
-      Expected<FunctionInfo> FIOrErr = Gsym.getFunctionInfoAtIndex(AddrIdx);
-      if (!FIOrErr) {
-        consumeError(FIOrErr.takeError());
-        continue;
+    
+    if (Status.type() == sys::fs::file_type::directory_file) {
+      if (Error Err = processStatsForDirectory(Path)) {
+        handleAllErrors(std::move(Err), [](const ErrorInfoBase &EI) {
+          errs() << "error: " << EI.message() << "\n";
+        });
+        return 1;
       }
-
-      FunctionInfo &FI = *FIOrErr;
-      const bool HasMergedFunctions = FI.MergedFunctions.has_value();
-      const bool IsOutlined =
-          Gsym.getString(FI.Name).contains("OUTLINED_FUNCTION_");
-
-      // Handle top-level function info
-      if (HasMergedFunctions) {
-        NumTopLevelWithMerged++;
-        if (IsOutlined)
-          NumOutlinedTopLevelWithMerged++;
-        else
-          NumNonOutlinedTopLevelWithMerged++;
-
-        // Count the parent function as a merged function too
-        NumMergedFunctions++;
-        if (IsOutlined)
-          NumOutlinedMergedFunctions++;
-        else
-          NumNonOutlinedMergedFunctions++;
-
-        // Count each merged function
-        const auto &MergedFuncs = FI.MergedFunctions->MergedFunctions;
-        NumMergedFunctions += MergedFuncs.size();
-
-        // Count outlined vs non-outlined merged functions
-        for (const auto &MergedFI : MergedFuncs) {
-          if (Gsym.getString(MergedFI.Name).contains("OUTLINED_FUNCTION_"))
-            NumOutlinedMergedFunctions++;
-          else
-            NumNonOutlinedMergedFunctions++;
-        }
-
-        // Update gap tracking
-        if (!FoundFirstMerged) {
-          NumBeforeFirstMerged = AddrIdx;
-          FoundFirstMerged = true;
-        } else {
-          MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
-        }
-        CurrentGap = 0;
-      } else {
-        NumTopLevelWithoutMerged++;
-        if (IsOutlined)
-          NumOutlinedTopLevelWithoutMerged++;
-        else
-          NumNonOutlinedTopLevelWithoutMerged++;
-
-        NumNonMergedFunctions++;
-        if (IsOutlined)
-          NumOutlinedNonMergedFunctions++;
-        else
-          NumNonOutlinedNonMergedFunctions++;
-
-        if (FoundFirstMerged)
-          CurrentGap++;
+    } else {
+      if (Error Err = processStatsForFile(Path)) {
+        handleAllErrors(std::move(Err), [](const ErrorInfoBase &EI) {
+          errs() << "error: " << EI.message() << "\n";
+        });
+        return 1;
       }
     }
-
-    // Update max gap if the last functions don't have merged info
-    if (FoundFirstMerged)
-      MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
-
-    // Calculate timing
-    sys::TimePoint<> EndTime = std::chrono::system_clock::now();
-    std::chrono::duration<double, std::milli> Duration = EndTime - StartTime;
-
-    // Calculate total functions and percentages
-    uint64_t TotalFunctions = NumMergedFunctions + NumNonMergedFunctions;
-    uint64_t TotalOutlinedFunctions =
-        NumOutlinedMergedFunctions + NumOutlinedNonMergedFunctions;
-    uint64_t TotalNonOutlinedFunctions =
-        NumNonOutlinedMergedFunctions + NumNonOutlinedNonMergedFunctions;
-
-    double PercentMerged =
-        TotalFunctions > 0 ? (double)NumMergedFunctions / TotalFunctions * 100.0
-                           : 0.0;
-    double PercentOutlinedMerged = TotalOutlinedFunctions > 0
-                                       ? (double)NumOutlinedMergedFunctions /
-                                             TotalOutlinedFunctions * 100.0
-                                       : 0.0;
-    double PercentNonOutlinedMerged =
-        TotalNonOutlinedFunctions > 0 ? (double)NumNonOutlinedMergedFunctions /
-                                            TotalNonOutlinedFunctions * 100.0
-                                      : 0.0;
-
-    // Print statistics
-    OS << "GSYM File Statistics for " << InputFilenames[0] << "\n";
-    OS << "Time taken to collect statistics: "
-       << format("%.2f", Duration.count()) << " ms\n\n";
-
-    // Format the statistics table
-    OS << "Statistic                         Total    Outline   Non-Outline\n";
-    OS << "------------------------------   --------  --------  -----------\n";
-    OS << format("All Merged Functions            %8" PRIu64 "  %8" PRIu64
-                 "  %11" PRIu64 "\n",
-                 NumMergedFunctions, NumOutlinedMergedFunctions,
-                 NumNonOutlinedMergedFunctions);
-    OS << format("All Non-Merged Functions        %8" PRIu64 "  %8" PRIu64
-                 "  %11" PRIu64 "\n",
-                 NumNonMergedFunctions, NumOutlinedNonMergedFunctions,
-                 NumNonOutlinedNonMergedFunctions);
-    OS << format("All Percentage Merged           %8.1f%%  %8.1f%%  %11.1f%%\n",
-                 PercentMerged, PercentOutlinedMerged,
-                 PercentNonOutlinedMerged);
-    OS << format("Top-Level with MergedInfo       %8" PRIu64 "  %8" PRIu64
-                 "  %11" PRIu64 "\n",
-                 NumTopLevelWithMerged, NumOutlinedTopLevelWithMerged,
-                 NumNonOutlinedTopLevelWithMerged);
-    OS << format("Top-Level without MergedInfo    %8" PRIu64 "  %8" PRIu64
-                 "  %11" PRIu64 "\n",
-                 NumTopLevelWithoutMerged, NumOutlinedTopLevelWithoutMerged,
-                 NumNonOutlinedTopLevelWithoutMerged);
-
-    OS << "\nFunctionInfo Vector Analysis:\n";
-    OS << format("Functions before first MergedInfo: %" PRIu64 "\n",
-                 NumBeforeFirstMerged);
-    OS << format("Maximum gap between MergedInfo: %" PRIu64 "\n",
-                 MaxGapBetweenMerged);
+    
     return 0;
   }
 
