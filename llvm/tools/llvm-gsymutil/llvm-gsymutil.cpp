@@ -658,6 +658,7 @@ static llvm::Error processStatsForFile(StringRef Filename) {
   uint64_t NumNonOutlinedTopLevelWithoutMerged = 0;
   uint64_t NumBeforeFirstMerged = 0;
   uint64_t MaxGapBetweenMerged = 0;
+  std::vector<uint64_t> GapsBetweenMerged;
   uint64_t CurrentGap = 0;
   bool FoundFirstMerged = false;
 
@@ -713,6 +714,8 @@ static llvm::Error processStatsForFile(StringRef Filename) {
         FoundFirstMerged = true;
       } else {
         MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
+        if (CurrentGap > 0)
+          GapsBetweenMerged.push_back(CurrentGap);
       }
       CurrentGap = 0;
     } else {
@@ -734,8 +737,11 @@ static llvm::Error processStatsForFile(StringRef Filename) {
   }
 
   // Update max gap if the last functions don't have merged info
-  if (FoundFirstMerged)
+  if (FoundFirstMerged) {
     MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
+    if (CurrentGap > 0)
+      GapsBetweenMerged.push_back(CurrentGap);
+  }
 
   // Calculate timing
   sys::TimePoint<> EndTime = std::chrono::system_clock::now();
@@ -791,9 +797,25 @@ static llvm::Error processStatsForFile(StringRef Filename) {
   outs() << "\nFunctionInfo Vector Analysis:\n";
   outs() << format("Functions before first MergedInfo: %" PRIu64 "\n",
                NumBeforeFirstMerged);
-  outs() << format("Maximum gap between MergedInfo: %" PRIu64 "\n",
-               MaxGapBetweenMerged);
-               
+
+  // Sort the gaps in descending order
+  std::sort(GapsBetweenMerged.begin(), GapsBetweenMerged.end(),
+            std::greater<uint64_t>());
+
+  // Output the top 20 gaps or fewer if we don't have that many
+  outs() << "Maximum gap between MergedInfo: ";
+  if (GapsBetweenMerged.empty()) {
+    outs() << "0\n";
+  } else {
+    size_t NumGapsToShow = std::min(GapsBetweenMerged.size(), size_t(20));
+    for (size_t i = 0; i < NumGapsToShow; ++i) {
+      outs() << GapsBetweenMerged[i];
+      if (i < NumGapsToShow - 1)
+        outs() << ", ";
+    }
+    outs() << "\n";
+  }
+
   return Error::success();
 }
 
