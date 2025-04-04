@@ -102,6 +102,7 @@ static bool UseMergedFunctions = false;
 static bool LoadDwarfCallSites = false;
 static std::string CallSiteYamlPath;
 static std::vector<std::string> MergedFunctionsFilters;
+static bool Stats = false;
 
 static void parseArgs(int argc, char **argv) {
   GSYMUtilOptTable Tbl;
@@ -210,6 +211,27 @@ static void parseArgs(int argc, char **argv) {
       llvm::errs()
           << ToolName
           << ": --merged-functions-filter requires --merged-functions\n";
+      std::exit(1);
+    }
+  }
+
+  Stats = Args.hasArg(OPT_stats);
+
+  if (Stats) {
+    // Stats mode has specific requirements - must specify exactly one input
+    // file and no other options
+    if (InputFilenames.size() != 1) {
+      llvm::errs() << "error: --stats requires exactly one input file.\n";
+      std::exit(1);
+    }
+
+    // Check no other incompatible options are specified
+    if (!LookupAddresses.empty() || LookupAddressesFromStdin ||
+        !OutputFilename.empty() || !ConvertFilename.empty() ||
+        !ArchFilters.empty() || !CallSiteYamlPath.empty() ||
+        !MergedFunctionsFilters.empty() || SegmentSize || NumThreads ||
+        UseMergedFunctions || LoadDwarfCallSites || Verify) {
+      llvm::errs() << "error: --stats cannot be used with other options.\n";
       std::exit(1);
     }
   }
@@ -607,6 +629,181 @@ int llvm_gsymutil_main(int argc, char **argv, const llvm::ToolContext &) {
   parseArgs(argc, argv);
 
   raw_ostream &OS = outs();
+
+  if (Stats) {
+    // Start timing
+    sys::TimePoint<> StartTime = std::chrono::system_clock::now();
+
+    // Load the GSYM file
+    ErrorOr<std::unique_ptr<MemoryBuffer>> BuffOrErr =
+        MemoryBuffer::getFile(InputFilenames[0]);
+    if (!BuffOrErr) {
+      error(InputFilenames[0], BuffOrErr.getError());
+      return 1;
+    }
+    std::unique_ptr<MemoryBuffer> Buffer = std::move(BuffOrErr.get());
+
+    // Parse the GSYM file
+    Expected<GsymReader> GsymOrErr =
+        GsymReader::copyBuffer(Buffer->getBuffer());
+    if (!GsymOrErr) {
+      error("failed to parse GSYM file", GsymOrErr.takeError());
+      return 1;
+    }
+    GsymReader &Gsym = *GsymOrErr;
+
+    // Statistics counters
+    uint64_t NumMergedFunctions = 0;
+    uint64_t NumNonMergedFunctions = 0;
+    uint64_t NumOutlinedMergedFunctions = 0;
+    uint64_t NumNonOutlinedMergedFunctions = 0;
+    uint64_t NumOutlinedNonMergedFunctions = 0;
+    uint64_t NumNonOutlinedNonMergedFunctions = 0;
+    uint64_t NumTopLevelWithMerged = 0;
+    uint64_t NumTopLevelWithoutMerged = 0;
+    uint64_t NumOutlinedTopLevelWithMerged = 0;
+    uint64_t NumNonOutlinedTopLevelWithMerged = 0;
+    uint64_t NumOutlinedTopLevelWithoutMerged = 0;
+    uint64_t NumNonOutlinedTopLevelWithoutMerged = 0;
+    uint64_t NumBeforeFirstMerged = 0;
+    uint64_t MaxGapBetweenMerged = 0;
+    uint64_t CurrentGap = 0;
+    bool FoundFirstMerged = false;
+
+    // Process all addresses
+    const uint32_t NumAddresses = Gsym.getNumAddresses();
+    for (uint32_t AddrIdx = 0; AddrIdx < NumAddresses; ++AddrIdx) {
+      auto Addr = Gsym.getAddress(AddrIdx);
+      if (!Addr)
+        continue;
+
+      // Get the function info for this address
+      Expected<FunctionInfo> FIOrErr = Gsym.getFunctionInfoAtIndex(AddrIdx);
+      if (!FIOrErr) {
+        consumeError(FIOrErr.takeError());
+        continue;
+      }
+
+      FunctionInfo &FI = *FIOrErr;
+      const bool HasMergedFunctions = FI.MergedFunctions.has_value();
+      const bool IsOutlined =
+          Gsym.getString(FI.Name).contains("OUTLINED_FUNCTION_");
+
+      // Handle top-level function info
+      if (HasMergedFunctions) {
+        NumTopLevelWithMerged++;
+        if (IsOutlined)
+          NumOutlinedTopLevelWithMerged++;
+        else
+          NumNonOutlinedTopLevelWithMerged++;
+
+        // Count the parent function as a merged function too
+        NumMergedFunctions++;
+        if (IsOutlined)
+          NumOutlinedMergedFunctions++;
+        else
+          NumNonOutlinedMergedFunctions++;
+
+        // Count each merged function
+        const auto &MergedFuncs = FI.MergedFunctions->MergedFunctions;
+        NumMergedFunctions += MergedFuncs.size();
+
+        // Count outlined vs non-outlined merged functions
+        for (const auto &MergedFI : MergedFuncs) {
+          if (Gsym.getString(MergedFI.Name).contains("OUTLINED_FUNCTION_"))
+            NumOutlinedMergedFunctions++;
+          else
+            NumNonOutlinedMergedFunctions++;
+        }
+
+        // Update gap tracking
+        if (!FoundFirstMerged) {
+          NumBeforeFirstMerged = AddrIdx;
+          FoundFirstMerged = true;
+        } else {
+          MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
+        }
+        CurrentGap = 0;
+      } else {
+        NumTopLevelWithoutMerged++;
+        if (IsOutlined)
+          NumOutlinedTopLevelWithoutMerged++;
+        else
+          NumNonOutlinedTopLevelWithoutMerged++;
+
+        NumNonMergedFunctions++;
+        if (IsOutlined)
+          NumOutlinedNonMergedFunctions++;
+        else
+          NumNonOutlinedNonMergedFunctions++;
+
+        if (FoundFirstMerged)
+          CurrentGap++;
+      }
+    }
+
+    // Update max gap if the last functions don't have merged info
+    if (FoundFirstMerged)
+      MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
+
+    // Calculate timing
+    sys::TimePoint<> EndTime = std::chrono::system_clock::now();
+    std::chrono::duration<double, std::milli> Duration = EndTime - StartTime;
+
+    // Calculate total functions and percentages
+    uint64_t TotalFunctions = NumMergedFunctions + NumNonMergedFunctions;
+    uint64_t TotalOutlinedFunctions =
+        NumOutlinedMergedFunctions + NumOutlinedNonMergedFunctions;
+    uint64_t TotalNonOutlinedFunctions =
+        NumNonOutlinedMergedFunctions + NumNonOutlinedNonMergedFunctions;
+
+    double PercentMerged =
+        TotalFunctions > 0 ? (double)NumMergedFunctions / TotalFunctions * 100.0
+                           : 0.0;
+    double PercentOutlinedMerged = TotalOutlinedFunctions > 0
+                                       ? (double)NumOutlinedMergedFunctions /
+                                             TotalOutlinedFunctions * 100.0
+                                       : 0.0;
+    double PercentNonOutlinedMerged =
+        TotalNonOutlinedFunctions > 0 ? (double)NumNonOutlinedMergedFunctions /
+                                            TotalNonOutlinedFunctions * 100.0
+                                      : 0.0;
+
+    // Print statistics
+    OS << "GSYM File Statistics for " << InputFilenames[0] << "\n";
+    OS << "Time taken to collect statistics: "
+       << format("%.2f", Duration.count()) << " ms\n\n";
+
+    // Format the statistics table
+    OS << "Statistic                         Total    Outline   Non-Outline\n";
+    OS << "------------------------------   --------  --------  -----------\n";
+    OS << format("All Merged Functions            %8" PRIu64 "  %8" PRIu64
+                 "  %11" PRIu64 "\n",
+                 NumMergedFunctions, NumOutlinedMergedFunctions,
+                 NumNonOutlinedMergedFunctions);
+    OS << format("All Non-Merged Functions        %8" PRIu64 "  %8" PRIu64
+                 "  %11" PRIu64 "\n",
+                 NumNonMergedFunctions, NumOutlinedNonMergedFunctions,
+                 NumNonOutlinedNonMergedFunctions);
+    OS << format("All Percentage Merged           %8.1f%%  %8.1f%%  %11.1f%%\n",
+                 PercentMerged, PercentOutlinedMerged,
+                 PercentNonOutlinedMerged);
+    OS << format("Top-Level with MergedInfo       %8" PRIu64 "  %8" PRIu64
+                 "  %11" PRIu64 "\n",
+                 NumTopLevelWithMerged, NumOutlinedTopLevelWithMerged,
+                 NumNonOutlinedTopLevelWithMerged);
+    OS << format("Top-Level without MergedInfo    %8" PRIu64 "  %8" PRIu64
+                 "  %11" PRIu64 "\n",
+                 NumTopLevelWithoutMerged, NumOutlinedTopLevelWithoutMerged,
+                 NumNonOutlinedTopLevelWithoutMerged);
+
+    OS << "\nFunctionInfo Vector Analysis:\n";
+    OS << format("Functions before first MergedInfo: %" PRIu64 "\n",
+                 NumBeforeFirstMerged);
+    OS << format("Maximum gap between MergedInfo: %" PRIu64 "\n",
+                 MaxGapBetweenMerged);
+    return 0;
+  }
 
   OutputAggregator Aggregation(&OS);
   if (!ConvertFilename.empty()) {
