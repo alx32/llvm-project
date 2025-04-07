@@ -678,6 +678,7 @@ static llvm::Error processStatsForFile(StringRef Filename) {
 
     FunctionInfo &FI = *FIOrErr;
     const bool HasMergedFunctions = FI.MergedFunctions.has_value();
+    const bool HasCallSites = FI.CallSites.has_value();
     const bool IsOutlined =
         Gsym.getString(FI.Name).contains("OUTLINED_FUNCTION_");
 
@@ -709,6 +710,31 @@ static llvm::Error processStatsForFile(StringRef Filename) {
       }
 
       // Update gap tracking
+      if (!FoundFirstMerged) {
+        NumBeforeFirstMerged = AddrIdx;
+        FoundFirstMerged = true;
+      } else {
+        MaxGapBetweenMerged = std::max(MaxGapBetweenMerged, CurrentGap);
+        if (CurrentGap > 0)
+          GapsBetweenMerged.push_back(CurrentGap);
+      }
+      CurrentGap = 0;
+    } else if (HasCallSites) {
+      // For functions with CallSites but no MergedFunctions, we still
+      // count them as having rich information for gap tracking purposes
+      NumTopLevelWithoutMerged++;
+      if (IsOutlined)
+        NumOutlinedTopLevelWithoutMerged++;
+      else
+        NumNonOutlinedTopLevelWithoutMerged++;
+
+      NumNonMergedFunctions++;
+      if (IsOutlined)
+        NumOutlinedNonMergedFunctions++;
+      else
+        NumNonOutlinedNonMergedFunctions++;
+
+      // Update gap tracking - we reset the gap for functions with CallSites
       if (!FoundFirstMerged) {
         NumBeforeFirstMerged = AddrIdx;
         FoundFirstMerged = true;
@@ -803,7 +829,7 @@ static llvm::Error processStatsForFile(StringRef Filename) {
             std::greater<uint64_t>());
 
   // Output the top 20 gaps or fewer if we don't have that many
-  outs() << "Maximum gap between MergedInfo: ";
+  outs() << "Maximum gap between MergedInfo or CallSites: ";
   if (GapsBetweenMerged.empty()) {
     outs() << "0\n";
   } else {
