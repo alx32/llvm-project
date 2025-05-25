@@ -183,6 +183,8 @@ def no_objc_category_merging : Flag<["-"], "no_objc_category_merging">,
     Group<grp_lld>;
 def lto_debug_pass_manager: Flag<["--"], "lto-debug-pass-manager">,
     HelpText<"Debug new pass manager">, Group<grp_lld>;
+def disable_verify: Flag<["--"], "disable-verify">,
+    HelpText<"Disable LLVM module verification during LTO">, Group<grp_lld>;
 def lto_newpm_passes: Joined<["--"], "lto-newpm-passes=">,
     HelpText<"Passes to run during LTO">, Group<grp_lld>;
 def load_pass_plugins : Separate<["--"], "load-pass-plugin">, Group<grp_lld>;

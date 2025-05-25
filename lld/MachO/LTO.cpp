@@ -48,6 +48,7 @@ static lto::Config createConfig() {
     c.PassPlugins.push_back(std::string(pluginFn));
   c.OptPipeline = std::string(config->ltoNewPmPasses);
   c.CodeModel = getCodeModelFromCMModel();
+  c.DisableVerify = config->disableVerify;
   c.CPU = getCPUStr();
   c.MAttrs = getMAttrs();
   c.DiagHandler = diagnosticHandler;
