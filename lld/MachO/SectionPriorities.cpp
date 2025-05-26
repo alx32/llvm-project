@@ -37,6 +37,30 @@ using namespace lld::macho;
 
 PriorityBuilder macho::priorityBuilder;
 
+// Strips suffixes that should be ignored for symbol matching in order files and
+// PGO profiles
+StringRef lld::macho::stripSymbolSuffixes(StringRef name) {
+  // Suffixes to ignore: ".__uniq.", ".llvm.", ".Tgm"
+  // We need to check for these suffixes in the middle of the symbol name
+
+  // Check for ".__uniq." suffix
+  size_t pos = name.find(".__uniq.");
+  if (pos != StringRef::npos)
+    return name.substr(0, pos);
+
+  // Check for ".llvm." suffix
+  pos = name.find(".llvm.");
+  if (pos != StringRef::npos)
+    return name.substr(0, pos);
+
+  // Check for ".Tgm" suffix
+  pos = name.find(".Tgm");
+  if (pos != StringRef::npos)
+    return name.substr(0, pos);
+
+  return name;
+}
+
 namespace {
 struct Edge {
   int from;
@@ -245,15 +269,35 @@ DenseMap<const InputSection *, int> CallGraphSort::run() {
   return orderMap;
 }
 
+std::optional<PriorityBuilder::SymbolPriorityEntry>
+macho::PriorityBuilder::findSymbolPriority(StringRef name) {
+  // First try exact match
+  auto it = priorities.find(name);
+  if (it != priorities.end())
+    return it->second;
+
+  // If not found, try with stripped suffixes
+  StringRef strippedName = stripSymbolSuffixes(name);
+  if (strippedName != name) {
+    it = priorities.find(strippedName);
+    if (it != priorities.end())
+      return it->second;
+  }
+
+  return std::nullopt;
+}
+
 std::optional<int>
 macho::PriorityBuilder::getSymbolPriority(const Defined *sym) {
   if (sym->isAbsolute())
     return std::nullopt;
 
-  auto it = priorities.find(sym->getName());
-  if (it == priorities.end())
+  StringRef name = sym->getName();
+  auto entryOpt = findSymbolPriority(name);
+  if (!entryOpt)
     return std::nullopt;
-  const SymbolPriorityEntry &entry = it->second;
+
+  const SymbolPriorityEntry &entry = *entryOpt;
   const InputFile *f = sym->isec()->getFile();
   if (!f)
     return entry.anyObjectFile;
@@ -333,6 +377,8 @@ void macho::PriorityBuilder::parseOrderFile(StringRef path) {
     symbol = line.trim();
 
     if (!symbol.empty()) {
+      // Strip suffixes from the symbol name in the order file
+      symbol = stripSymbolSuffixes(symbol);
       SymbolPriorityEntry &entry = priorities[symbol];
       if (!objectFile.empty())
         entry.objectFiles.insert(std::make_pair(objectFile, prio));

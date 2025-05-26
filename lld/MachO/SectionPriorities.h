@@ -12,8 +12,14 @@
 #include "InputSection.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/StringRef.h"
+#include <optional>
 
 namespace lld::macho {
+
+// Strips suffixes that should be ignored for symbol matching in order files and
+// PGO profiles
+llvm::StringRef stripSymbolSuffixes(llvm::StringRef name);
 
 using SectionPair = std::pair<const InputSection *, const InputSection *>;
 
@@ -67,6 +73,8 @@ private:
   };
 
   std::optional<int> getSymbolPriority(const Defined *sym);
+  // Lookup a symbol in the priorities map, ignoring certain suffixes
+  std::optional<SymbolPriorityEntry> findSymbolPriority(llvm::StringRef name);
   llvm::DenseMap<llvm::StringRef, SymbolPriorityEntry> priorities;
   llvm::MapVector<SectionPair, uint64_t> callGraphProfile;
 };
