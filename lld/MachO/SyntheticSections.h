@@ -562,6 +562,7 @@ public:
   std::vector<CStringInputSection *> inputs;
 
 protected:
+  void parseOrderFile();
   uint64_t size;
   // Map of string hash to priority for -order_file_cstring
   llvm::DenseMap<uint32_t, int> stringHashPriorities;

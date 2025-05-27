@@ -1707,7 +1707,7 @@ void CStringSection::parseOrderFile() {
 
   MemoryBufferRef mbref = *buffer;
   int priority = 1; // Lower value means higher priority
-  for (StringRef line : args::getLines(mbref)) {
+  for (StringRef line : llvm::getLines(mbref)) {
     line = line.take_until([](char c) { return c == '#'; }).trim();
     if (line.empty())
       continue;
