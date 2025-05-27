@@ -226,6 +226,7 @@ struct Configuration {
   llvm::StringRef printSymbolOrder;
 
   llvm::StringRef irpgoProfilePath;
+  llvm::StringRef orderFileCString;
   bool bpStartupFunctionSort = false;
   bool bpCompressionSortStartupFunctions = false;
   bool bpFunctionOrderForCompression = false;

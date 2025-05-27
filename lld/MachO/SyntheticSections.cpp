@@ -1692,22 +1692,101 @@ void CStringSection::writeTo(uint8_t *buf) const {
   }
 }
 
+// Parse the order file for C-strings. The file contains one hash per line,
+// with optional comments starting with '#'.
+void CStringSection::parseOrderFile() {
+  if (config->orderFileCString.empty())
+    return;
+
+  hasOrderFile = true;
+  std::optional<MemoryBufferRef> buffer = readFile(config->orderFileCString);
+  if (!buffer) {
+    error("could not read order file: " + config->orderFileCString);
+    return;
+  }
+
+  MemoryBufferRef mbref = *buffer;
+  int priority = 1; // Lower value means higher priority
+  for (StringRef line : args::getLines(mbref)) {
+    line = line.take_until([](char c) { return c == '#'; }).trim();
+    if (line.empty())
+      continue;
+
+    uint32_t hash;
+    if (line.getAsInteger(10, hash)) {
+      error("invalid hash in " + config->orderFileCString + ": " + line);
+      continue;
+    }
+
+    // Use only the lower 31 bits as specified in the requirements
+    hash &= 0x7FFFFFFF;
+    stringHashPriorities[hash] = priority++;
+  }
+}
+
 void CStringSection::finalizeContents() {
-  uint64_t offset = 0;
+  parseOrderFile();
+
+  // If we have an order file, we need to sort the strings according to the
+  // order
+  struct StringPiecePair {
+    CStringInputSection *isec;
+    size_t idx;
+    uint32_t hash;
+    int priority;
+  };
+
+  std::vector<StringPiecePair> stringPieces;
+  stringPieces.reserve(inputs.size() * 4); // Rough estimate
+
+  // Collect all string pieces and calculate their hashes
   for (CStringInputSection *isec : inputs) {
     for (const auto &[i, piece] : llvm::enumerate(isec->pieces)) {
       if (!piece.live)
         continue;
-      // See comment above DeduplicatedCStringSection for how alignment is
-      // handled.
-      uint32_t pieceAlign = 1
-                            << llvm::countr_zero(isec->align | piece.inSecOff);
-      offset = alignToPowerOf2(offset, pieceAlign);
-      piece.outSecOff = offset;
-      isec->isFinal = true;
+
       StringRef string = isec->getStringRef(i);
-      offset += string.size() + 1; // account for null terminator
+      uint32_t hash = llvm::xxh3_64bits(string) & 0x7FFFFFFF;
+      int priority = hasOrderFile ? stringHashPriorities.lookup(hash) : 0;
+      stringPieces.push_back({isec, i, hash, priority});
     }
+  }
+
+  // Sort the strings: first by priority (if in order file), then by hash (for
+  // stable ordering)
+  if (hasOrderFile) {
+    llvm::stable_sort(stringPieces,
+                      [](const StringPiecePair &a, const StringPiecePair &b) {
+                        // Lower priority value means higher priority
+                        if (a.priority != 0 && b.priority != 0)
+                          return a.priority < b.priority;
+                        // Strings in the order file come before strings not in
+                        // the order file
+                        if (a.priority != 0)
+                          return true;
+                        if (b.priority != 0)
+                          return false;
+                        // For strings not in the order file, sort by hash for
+                        // stable ordering
+                        return a.hash < b.hash;
+                      });
+  }
+
+  // Assign offsets to the sorted strings
+  uint64_t offset = 0;
+  for (const auto &pair : stringPieces) {
+    CStringInputSection *isec = pair.isec;
+    size_t i = pair.idx;
+    auto &piece = isec->pieces[i];
+
+    // See comment above DeduplicatedCStringSection for how alignment is
+    // handled.
+    uint32_t pieceAlign = 1 << llvm::countr_zero(isec->align | piece.inSecOff);
+    offset = alignToPowerOf2(offset, pieceAlign);
+    piece.outSecOff = offset;
+    isec->isFinal = true;
+    StringRef string = isec->getStringRef(i);
+    offset += string.size() + 1; // account for null terminator
   }
   size = offset;
 }
@@ -1908,18 +1987,18 @@ ObjCImageInfoSection::parseImageInfo(const InputFile *file) {
 
 static std::string swiftVersionString(uint8_t version) {
   switch (version) {
-    case 1:
-      return "1.0";
-    case 2:
-      return "1.1";
-    case 3:
-      return "2.0";
-    case 4:
-      return "3.0";
-    case 5:
-      return "4.0";
-    default:
-      return ("0x" + Twine::utohexstr(version)).str();
+  case 1:
+    return "1.0";
+  case 2:
+    return "1.1";
+  case 3:
+    return "2.0";
+  case 4:
+    return "3.0";
+  case 5:
+    return "4.0";
+  default:
+    return ("0x" + Twine::utohexstr(version)).str();
   }
 }
 
