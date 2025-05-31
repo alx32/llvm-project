@@ -260,7 +260,7 @@ void MCDwarfLineTable::emitOne(
   // table using ranges whenever CU or section changes. However, the MC path
   // does not track ranges nor terminate the line table. In that case,
   // conservatively use the section end symbol to end the line table.
-  if (!EndEntryEmitted && !IsAtStartSeq)
+  if (!EndEntryEmitted && !IsAtStartSeq && LastLabel)
     MCOS->emitDwarfLineEndEntry(Section, LastLabel);
 }
 
