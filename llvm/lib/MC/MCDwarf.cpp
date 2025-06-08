@@ -194,7 +194,9 @@ void MCDwarfLineTable::emitOne(
                                     /*EndLabel =*/LastLabel);
         init();
       }
-      MCOS->emitLabel(LineEntry.LineStreamLabel, LineEntry.StreamLabelDefLoc);
+      // Check if the label is already defined before emitting it.
+      if (!LineEntry.LineStreamLabel->isDefined())
+        MCOS->emitLabel(LineEntry.LineStreamLabel, LineEntry.StreamLabelDefLoc);
       continue;
     }
 
