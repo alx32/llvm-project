@@ -268,7 +268,16 @@ void MCDwarfLineTable::endCurrentSeqAndEmitLineStreamLabel(MCStreamer *MCOS,
                                                            SMLoc DefLoc,
                                                            StringRef Name) {
   auto &ctx = MCOS->getContext();
-  auto *LineStreamLabel = ctx.getOrCreateSymbol(Name);
+  MCSymbol *ActualLineStreamLabel;
+  if (Name.empty()) {
+    // If the provided name is empty, it would lead to creating or getting
+    // the same empty-named symbol repeatedly. Emitting a label for such a
+    // symbol multiple times causes a "symbol already defined" error.
+    // Using a unique temporary symbol avoids this issue for unnamed sequences.
+    ActualLineStreamLabel = ctx.createTempSymbol("debug_line_stream_label");
+  } else {
+    ActualLineStreamLabel = ctx.getOrCreateSymbol(Name);
+  }
   auto *LineSym = ctx.createTempSymbol();
   MCOS->emitLabel(LineSym);
   const MCDwarfLoc &DwarfLoc = ctx.getCurrentDwarfLoc();
@@ -276,7 +285,7 @@ void MCDwarfLineTable::endCurrentSeqAndEmitLineStreamLabel(MCStreamer *MCOS,
   // Create a 'fake' line entry by having LineStreamLabel be non-null. This
   // won't actually emit any line information, it will reset the line table
   // sequence and emit a label at the start of the new line table sequence.
-  MCDwarfLineEntry LineEntry(LineSym, DwarfLoc, LineStreamLabel, DefLoc);
+  MCDwarfLineEntry LineEntry(LineSym, DwarfLoc, ActualLineStreamLabel, DefLoc);
   getMCLineSections().addLineEntry(LineEntry, MCOS->getCurrentSectionOnly());
 }
 
