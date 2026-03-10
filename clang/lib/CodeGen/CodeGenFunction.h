@@ -303,9 +303,6 @@ public:
   /// nest would extend.
   SmallVector<llvm::CanonicalLoopInfo *, 4> OMPLoopNestStack;
 
-  /// Stack to track the Logical Operator recursion nest for MC/DC.
-  SmallVector<const BinaryOperator *, 16> MCDCLogOpStack;
-
   /// Stack to track the controlled convergence tokens.
   SmallVector<llvm::ConvergenceControlInst *, 4> ConvergenceTokenStack;
 
@@ -448,6 +445,12 @@ public:
     }
 
     return PostAllocaInsertPt;
+  }
+
+  // Try to preserve the source's name to make IR more readable.
+  llvm::Value *performAddrSpaceCast(llvm::Value *Src, llvm::Type *DestTy) {
+    return Builder.CreateAddrSpaceCast(
+        Src, DestTy, Src->hasName() ? Src->getName() + ".ascast" : "");
   }
 
   /// API for captured statement code generation.
@@ -1647,9 +1650,6 @@ private:
 
   std::unique_ptr<CodeGenPGO> PGO;
 
-  /// Bitmap used by MC/DC to track condition outcomes of a boolean expression.
-  Address MCDCCondBitmapAddr = Address::invalid();
-
   /// Calculate branch weights appropriate for PGO data
   llvm::MDNode *createProfileWeights(uint64_t TrueCount,
                                      uint64_t FalseCount) const;
@@ -1658,7 +1658,8 @@ private:
                                             uint64_t LoopCount) const;
 
 public:
-  std::pair<bool, bool> getIsCounterPair(const Stmt *S) const;
+  bool hasSkipCounter(const Stmt *S) const;
+
   void markStmtAsUsed(bool Skipped, const Stmt *S);
   void markStmtMaybeUsed(const Stmt *S);
 
@@ -1703,6 +1704,9 @@ public:
     return (BOp && BOp->isLogicalOp());
   }
 
+  bool isMCDCDecisionExpr(const Expr *E) const;
+  bool isMCDCBranchExpr(const Expr *E) const;
+
   /// Zero-init the MCDC temp value.
   void maybeResetMCDCCondBitmap(const Expr *E);
 
@@ -1735,6 +1739,10 @@ public:
   /// group (See ApplyAtomGroup for more info).
   void addInstToNewSourceAtom(llvm::Instruction *KeyInstruction,
                               llvm::Value *Backup);
+
+  /// Copy all PFP fields from SrcPtr to DestPtr while updating signatures,
+  /// assuming that DestPtr was already memcpy'd from SrcPtr.
+  void emitPFPPostCopyUpdates(Address DestPtr, Address SrcPtr, QualType Ty);
 
 private:
   /// SwitchInsn - This is nearest current switch instruction. It is null if
@@ -2906,15 +2914,15 @@ public:
   RawAddress CreateDefaultAlignTempAlloca(llvm::Type *Ty,
                                           const Twine &Name = "tmp");
 
-  /// CreateIRTemp - Create a temporary IR object of the given type, with
-  /// appropriate alignment. This routine should only be used when an temporary
-  /// value needs to be stored into an alloca (for example, to avoid explicit
-  /// PHI construction), but the type is the IR type, not the type appropriate
-  /// for storing in memory.
+  /// CreateIRTempWithoutCast - Create a temporary IR object of the given type,
+  /// with appropriate alignment. This routine should only be used when an
+  /// temporary value needs to be stored into an alloca (for example, to avoid
+  /// explicit PHI construction), but the type is the IR type, not the type
+  /// appropriate for storing in memory.
   ///
   /// That is, this is exactly equivalent to CreateMemTemp, but calling
   /// ConvertType instead of ConvertTypeForMem.
-  RawAddress CreateIRTemp(QualType T, const Twine &Name = "tmp");
+  RawAddress CreateIRTempWithoutCast(QualType T, const Twine &Name = "tmp");
 
   /// CreateMemTemp - Create a temporary memory object of the given type, with
   /// appropriate alignmen and cast it to the default address space. Returns
@@ -3666,6 +3674,8 @@ public:
                          bool ignoreResult = false);
   LValue EmitCoyieldLValue(const CoyieldExpr *E);
   RValue EmitCoroutineIntrinsic(const CallExpr *E, unsigned int IID);
+
+  void EmitSYCLKernelCallStmt(const SYCLKernelCallStmt &S);
 
   void EnterCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
   void ExitCXXTryStmt(const CXXTryStmt &S, bool IsFnTryBlock = false);
@@ -4441,6 +4451,7 @@ public:
   LValue EmitArraySectionExpr(const ArraySectionExpr *E,
                               bool IsLowerBound = true);
   LValue EmitExtVectorElementExpr(const ExtVectorElementExpr *E);
+  LValue EmitMatrixElementExpr(const MatrixElementExpr *E);
   LValue EmitMemberExpr(const MemberExpr *E);
   LValue EmitObjCIsaExpr(const ObjCIsaExpr *E);
   LValue EmitCompoundLiteralLValue(const CompoundLiteralExpr *E);
@@ -5062,8 +5073,8 @@ public:
 
   /// Create a store to \arg DstPtr from \arg Src, truncating the stored value
   /// to at most \arg DstSize bytes.
-  void CreateCoercedStore(llvm::Value *Src, Address Dst, llvm::TypeSize DstSize,
-                          bool DstIsVolatile);
+  void CreateCoercedStore(llvm::Value *Src, QualType SrcFETy, Address Dst,
+                          llvm::TypeSize DstSize, bool DstIsVolatile);
 
   /// EmitExtendGCLifetime - Given a pointer to an Objective-C object,
   /// make sure it survives garbage collection until this point.
@@ -5557,6 +5568,10 @@ public:
                                        ArrayRef<FMVResolverOption> Options);
   void EmitRISCVMultiVersionResolver(llvm::Function *Resolver,
                                      ArrayRef<FMVResolverOption> Options);
+
+  Address EmitAddressOfPFPField(Address RecordPtr, const PFPField &Field);
+  Address EmitAddressOfPFPField(Address RecordPtr, Address FieldPtr,
+                                const FieldDecl *Field);
 
 private:
   QualType getVarArgType(const Expr *Arg);
