@@ -2506,7 +2506,7 @@ void DWARFLinker::DIECloner::generateLineTableForUnit(CompileUnit &Unit) {
             CurrentSeqStart = i;
           OutputRowToSeqStart[i] = CurrentSeqStart;
 
-          // Map original row index to output row index
+          // Map original row index to output row index.
           OrigRowToOutputRow[OutputRows[i].OriginalRowIndex] = i;
         }
 
