@@ -2501,7 +2501,7 @@ void DWARFLinker::DIECloner::generateLineTableForUnit(CompileUnit &Unit) {
 
         size_t CurrentSeqStart = 0;
         for (size_t i = 0; i < OutputRows.size(); ++i) {
-          // Track the current sequence start
+          // Track the current sequence start.
           if (OutputRows[i].isStartSeqInOutput)
             CurrentSeqStart = i;
           OutputRowToSeqStart[i] = CurrentSeqStart;
