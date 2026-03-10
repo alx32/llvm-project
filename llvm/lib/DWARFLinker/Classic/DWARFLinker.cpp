@@ -2493,7 +2493,7 @@ void DWARFLinker::DIECloner::generateLineTableForUnit(CompileUnit &Unit) {
 
         // Build two maps to handle stmt_sequence patching:
         // 1. OrigRowToOutputRow: maps original row indices to output row
-        // indices (for all rows, not just sequence starts)
+        // indices (for all rows, not just sequence starts).
         // 2. OutputRowToSeqStart: maps each output row index to its sequence
         //    start's output row index
         DenseMap<size_t, size_t> OrigRowToOutputRow;
